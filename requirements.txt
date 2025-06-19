@@ -1,5 +1,5 @@
-streamlit==1.26.0
-streamlit-mic-recorder==0.0.5
-faster-whisper==1.0.0
-fpdf==1.7.2
-requests==2.31.0
+streamlit==1.46.0
+streamlit-mic-recorder
+faster-whisper
+fpdf
+requests
