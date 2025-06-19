@@ -1,6 +1,5 @@
 import streamlit as st
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, ClientSettings
-import whisper
 import av
 import tempfile
 from fpdf import FPDF
@@ -8,17 +7,18 @@ import os
 import requests
 from dotenv import load_dotenv
 import numpy as np
+from faster_whisper import WhisperModel
 
 load_dotenv()
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 
-st.set_page_config(page_title="Web Audio Transcriber", layout="wide")
-st.title("🎤 Web-Based Audio Transcriber with Mistral Cleanup")
+st.set_page_config(page_title="Live Transcriber", layout="wide")
+st.title("🎤 Live Audio Transcriber with Mistral Correction")
 
-# Load Whisper model
-model = whisper.load_model("base")
+# Load model (tiny for fast use)
+model = WhisperModel("tiny", compute_type="int8")
 
-# Session state
+# Streamlit session state
 if "transcript" not in st.session_state:
     st.session_state.transcript = ""
 if "corrected" not in st.session_state:
@@ -39,6 +39,7 @@ class AudioProcessor:
 
 processor = AudioProcessor()
 
+# WebRTC mic input
 webrtc_streamer(
     key="audio",
     mode=WebRtcMode.SENDONLY,
@@ -52,21 +53,20 @@ webrtc_streamer(
 )
 
 if st.button("Transcribe"):
-    st.info("Processing audio...")
+    st.info("🧠 Transcribing...")
 
-    # Save recorded bytes to temp wav
+    # Save audio to temporary file
     with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
-        wf = f.name
-        with open(wf, "wb") as out:
-            out.write(b"".join(processor.frames))
+        audio_path = f.name
+        f.write(b"".join(processor.frames))
 
-    # Whisper transcription
-    result = model.transcribe(wf)
-    st.session_state.transcript = result["text"]
-    st.text_area("Transcribed Text", st.session_state.transcript, height=200)
+    segments, info = model.transcribe(audio_path)
+    text = " ".join([segment.text for segment in segments])
+    st.session_state.transcript = text
+    st.text_area("Raw Transcript", text, height=200)
 
-    # Mistral Correction
-    st.info("Sending to Mistral for correction...")
+    # Call Mistral API for correction
+    st.info("✨ Sending to Mistral for correction...")
     headers = {
         "Authorization": f"Bearer {MISTRAL_API_KEY}",
         "Content-Type": "application/json"
@@ -74,7 +74,7 @@ if st.button("Transcribe"):
     data = {
         "model": "mistral-tiny",
         "messages": [
-            {"role": "system", "content": "Correct grammar and transcription errors."},
+            {"role": "system", "content": "You are a helpful assistant that fixes grammar and transcription errors."},
             {"role": "user", "content": st.session_state.transcript}
         ],
         "temperature": 0.3
@@ -85,14 +85,14 @@ if st.button("Transcribe"):
         r.raise_for_status()
         corrected = r.json()["choices"][0]["message"]["content"]
         st.session_state.corrected = corrected
+        st.text_area("✅ Corrected Transcript", corrected, height=200)
         st.session_state.show_pdf = True
-        st.text_area("Corrected Transcript", corrected, height=200)
     except Exception as e:
-        st.error("Mistral correction failed.")
+        st.error("⚠️ Mistral correction failed.")
         st.session_state.corrected = st.session_state.transcript
         st.session_state.show_pdf = True
 
-# PDF Export
+# Generate and download PDF
 if st.session_state.show_pdf:
     pdf = FPDF()
     pdf.add_page()
