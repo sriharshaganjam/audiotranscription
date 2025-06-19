@@ -1,5 +1,5 @@
 streamlit
-streamlit-webrtc
+streamlit-webrtc==0.43.0
 faster-whisper
 fpdf
 requests
