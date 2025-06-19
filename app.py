@@ -1,49 +1,72 @@
 import streamlit as st
-from streamlit_audio_recorder import audio_recorder
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, ClientSettings
 import whisper
+import av
 import tempfile
 from fpdf import FPDF
-import requests
 import os
+import requests
 from dotenv import load_dotenv
+import numpy as np
 
-# Load Mistral API key
 load_dotenv()
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 
-# Whisper model
+st.set_page_config(page_title="Web Audio Transcriber", layout="wide")
+st.title("🎤 Web-Based Audio Transcriber with Mistral Cleanup")
+
+# Load Whisper model
 model = whisper.load_model("base")
 
-# Streamlit page setup
-st.set_page_config(page_title="Live Transcriber", layout="wide")
-st.title("🎙️ Audio Transcriber with Mistral Correction")
-
-# State variables
+# Session state
 if "transcript" not in st.session_state:
     st.session_state.transcript = ""
 if "corrected" not in st.session_state:
     st.session_state.corrected = ""
-if "show_download" not in st.session_state:
-    st.session_state.show_download = False
+if "show_pdf" not in st.session_state:
+    st.session_state.show_pdf = False
 
-# Audio recording UI
-audio_bytes = audio_recorder(text="🔴 Transcribe", recording_color="#FF0000", neutral_color="#6c6c6c", icon_name="microphone", pause_threshold=3.0)
+# Audio processor
+class AudioProcessor:
+    def __init__(self):
+        self.frames = []
 
-if audio_bytes:
-    st.success("✅ Audio recorded. Transcribing...")
+    def recv(self, frame: av.AudioFrame) -> av.AudioFrame:
+        audio = frame.to_ndarray()
+        audio = audio.flatten().astype(np.int16).tobytes()
+        self.frames.append(audio)
+        return frame
 
-    # Save to temp WAV
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-        f.write(audio_bytes)
-        audio_path = f.name
+processor = AudioProcessor()
 
-    # Transcribe using Whisper
-    result = model.transcribe(audio_path, fp16=False)
-    st.session_state.transcript = result['text']
-    st.text_area("Raw Transcript", st.session_state.transcript, height=200)
+webrtc_streamer(
+    key="audio",
+    mode=WebRtcMode.SENDONLY,
+    in_audio=True,
+    client_settings=ClientSettings(
+        media_stream_constraints={"video": False, "audio": True},
+        rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+    ),
+    audio_receiver_size=4096,
+    audio_processor_factory=lambda: processor,
+)
 
-    # Mistral cleanup
-    st.info("✨ Sending to Mistral for grammar correction...")
+if st.button("Transcribe"):
+    st.info("Processing audio...")
+
+    # Save recorded bytes to temp wav
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
+        wf = f.name
+        with open(wf, "wb") as out:
+            out.write(b"".join(processor.frames))
+
+    # Whisper transcription
+    result = model.transcribe(wf)
+    st.session_state.transcript = result["text"]
+    st.text_area("Transcribed Text", st.session_state.transcript, height=200)
+
+    # Mistral Correction
+    st.info("Sending to Mistral for correction...")
     headers = {
         "Authorization": f"Bearer {MISTRAL_API_KEY}",
         "Content-Type": "application/json"
@@ -51,54 +74,34 @@ if audio_bytes:
     data = {
         "model": "mistral-tiny",
         "messages": [
-            {"role": "system", "content": "You are a helpful assistant that fixes grammar and transcription errors."},
+            {"role": "system", "content": "Correct grammar and transcription errors."},
             {"role": "user", "content": st.session_state.transcript}
         ],
         "temperature": 0.3
     }
 
     try:
-        response = requests.post("https://api.mistral.ai/v1/chat/completions", headers=headers, json=data)
-        response.raise_for_status()
-        st.session_state.corrected = response.json()['choices'][0]['message']['content']
-        st.text_area("✅ Corrected Transcript", st.session_state.corrected, height=200)
-        st.session_state.show_download = True
+        r = requests.post("https://api.mistral.ai/v1/chat/completions", json=data, headers=headers)
+        r.raise_for_status()
+        corrected = r.json()["choices"][0]["message"]["content"]
+        st.session_state.corrected = corrected
+        st.session_state.show_pdf = True
+        st.text_area("Corrected Transcript", corrected, height=200)
     except Exception as e:
-        st.error("❌ Failed to correct transcript. Showing raw transcript only.")
+        st.error("Mistral correction failed.")
         st.session_state.corrected = st.session_state.transcript
-        st.session_state.show_download = True
+        st.session_state.show_pdf = True
 
-# Fixed bottom download button
-if st.session_state.show_download:
-    with st.container():
-        st.markdown("""
-        <style>
-        #fixed-download {
-            position: fixed;
-            bottom: 0;
-            left: 0;
-            width: 100%;
-            background-color: #fff;
-            padding: 1rem;
-            border-top: 1px solid #ccc;
-            z-index: 9999;
-            text-align: center;
-        }
-        </style>
-        <div id="fixed-download">
-        """, unsafe_allow_html=True)
+# PDF Export
+if st.session_state.show_pdf:
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", size=12)
+    for line in st.session_state.corrected.split('\n'):
+        pdf.multi_cell(0, 10, line)
 
-        # Generate PDF
-        pdf = FPDF()
-        pdf.add_page()
-        pdf.set_font("Arial", size=12)
-        for line in st.session_state.corrected.split('\n'):
-            pdf.multi_cell(0, 10, line)
+    pdf_path = "transcript.pdf"
+    pdf.output(pdf_path)
 
-        pdf_path = "transcript.pdf"
-        pdf.output(pdf_path)
-
-        with open(pdf_path, "rb") as f:
-            st.download_button("📄 Download Transcript as PDF", f, file_name="transcript.pdf")
-
-        st.markdown("</div>", unsafe_allow_html=True)
+    with open(pdf_path, "rb") as f:
+        st.download_button("📄 Download Transcript as PDF", f, file_name="transcript.pdf")
