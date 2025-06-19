@@ -1,8 +1,7 @@
 streamlit
-streamlit-webrtc==0.43.0
+streamlit-mic-recorder
 faster-whisper
 fpdf
 requests
 python-dotenv
-av
 ctranslate2
