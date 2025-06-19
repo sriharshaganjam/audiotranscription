@@ -48,7 +48,7 @@ st.title("🎙️ Live Audio Transcriber with Mistral Correction")
 transcript_box = st.empty()
 
 # Mic Recorder
-audio = mic_recorder(start=st.session_state.recording, key="recorder", pause_threshold=3)
+audio = mic_recorder(key="recorder")
 
 if audio:
     st.session_state.audio_data = audio["bytes"]
