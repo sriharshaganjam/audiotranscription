@@ -1,0 +1,6 @@
+streamlit
+openai-whisper
+pyaudio
+fpdf
+python-dotenv
+requests
