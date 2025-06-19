@@ -1,6 +1,7 @@
 streamlit
+streamlit-webrtc
 openai-whisper
 fpdf
 requests
 python-dotenv
-streamlit-audio-recorder
+av
