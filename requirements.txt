@@ -1,5 +1,7 @@
-streamlit==1.46.0
+streamlit
 streamlit-mic-recorder
 faster-whisper
 fpdf
 requests
+python-dotenv
+ctranslate2
