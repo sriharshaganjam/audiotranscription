@@ -6,8 +6,6 @@ from fpdf import FPDF
 import requests
 import os
 from dotenv import load_dotenv
-import threading
-import time
 
 # Load Mistral API Key
 load_dotenv()
@@ -35,133 +33,124 @@ def jaccard_similarity(text1, text2):
 st.set_page_config(page_title="Live Audio Transcriber", layout="centered")
 st.title("🎤 Live Audio Transcriber with Mistral Correction")
 
-# Initialize session state for live transcription
-if 'live_transcript' not in st.session_state:
-    st.session_state.live_transcript = ""
-if 'final_transcript' not in st.session_state:
-    st.session_state.final_transcript = ""
+# Initialize session state
+if 'raw_transcript' not in st.session_state:
+    st.session_state.raw_transcript = ""
 if 'corrected_transcript' not in st.session_state:
     st.session_state.corrected_transcript = ""
-if 'recording_active' not in st.session_state:
-    st.session_state.recording_active = False
+if 'show_results' not in st.session_state:
+    st.session_state.show_results = False
 
 # Recorder UI
 audio = mic_recorder(
     start_prompt="🔴 Start Recording", 
     stop_prompt="⏹ Stop Recording", 
     key="recorder",
-    format="wav",
-    use_container_width=True
+    format="wav"
 )
 
-# Live transcript display (updates while recording)
-st.subheader("📝 Live Transcription")
-live_placeholder = st.empty()
-
-# Check if recording just started
-if audio and audio.get('bytes') and not st.session_state.recording_active:
-    st.session_state.recording_active = True
-    st.session_state.live_transcript = ""
+# Process audio when recording stops
+if audio:
+    st.info("⏳ Transcribing audio...")
+    
+    # Reset results when new recording starts
+    st.session_state.show_results = False
     st.session_state.corrected_transcript = ""
 
-# Live transcription during recording
-if st.session_state.recording_active and audio and audio.get('bytes'):
-    try:
-        # Save current audio chunk temporarily
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmpfile:
-            tmpfile.write(audio["bytes"])
-            audio_path = tmpfile.name
+    # Save audio temporarily
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmpfile:
+        tmpfile.write(audio["bytes"])
+        audio_path = tmpfile.name
 
-        # Transcribe current chunk
+    # Transcribe using Whisper
+    try:
         segments, _ = model.transcribe(audio_path)
-        current_text = " ".join([s.text for s in segments])
-        
-        # Update live transcript
-        st.session_state.live_transcript = current_text
+        st.session_state.raw_transcript = " ".join([s.text for s in segments])
         
         # Clean up temp file
         os.unlink(audio_path)
         
-    except Exception as e:
-        st.error(f"Live transcription error: {str(e)}")
-
-# Display live transcript
-with live_placeholder.container():
-    st.text_area(
-        "Live Transcript (updating as you speak)", 
-        st.session_state.live_transcript, 
-        height=200,
-        key="live_display"
-    )
-
-# Process final transcript when recording stops
-if not audio or not audio.get('bytes'):
-    if st.session_state.recording_active:
-        st.session_state.recording_active = False
-        st.session_state.final_transcript = st.session_state.live_transcript
+        # Display raw transcript immediately
+        st.subheader("📝 Raw Transcription")
+        st.text_area("Raw Transcript", st.session_state.raw_transcript, height=200, key="raw_display")
         
-        # Only process correction if we have text
-        if st.session_state.final_transcript.strip():
-            st.info("⏳ Processing with Mistral AI...")
+        # Process with Mistral if we have text
+        if st.session_state.raw_transcript.strip():
+            with st.spinner("🤖 Processing with Mistral AI..."):
+                # Correct using Mistral
+                headers = {
+                    "Authorization": f"Bearer {MISTRAL_API_KEY}",
+                    "Content-Type": "application/json"
+                }
+                payload = {
+                    "model": "mistral-tiny",
+                    "messages": [
+                        {"role": "system", "content": "Correct transcription errors, improve grammar, and fix punctuation. Maintain the original meaning and structure."},
+                        {"role": "user", "content": st.session_state.raw_transcript}
+                    ],
+                    "temperature": 0.3
+                }
+
+                try:
+                    res = requests.post("https://api.mistral.ai/v1/chat/completions", headers=headers, json=payload)
+                    res.raise_for_status()
+                    st.session_state.corrected_transcript = res.json()["choices"][0]["message"]["content"]
+                    st.session_state.show_results = True
+                except Exception as e:
+                    st.error(f"❌ Mistral correction failed: {str(e)}")
+                    st.session_state.corrected_transcript = st.session_state.raw_transcript
+                    st.session_state.show_results = True
+        else:
+            st.warning("No speech detected in the recording.")
             
-            # Correct using Mistral
-            headers = {
-                "Authorization": f"Bearer {MISTRAL_API_KEY}",
-                "Content-Type": "application/json"
-            }
-            payload = {
-                "model": "mistral-tiny",
-                "messages": [
-                    {"role": "system", "content": "Correct transcription errors, improve grammar, and fix punctuation. Maintain the original meaning and structure."},
-                    {"role": "user", "content": st.session_state.final_transcript}
-                ],
-                "temperature": 0.3
-            }
+    except Exception as e:
+        st.error(f"❌ Transcription failed: {str(e)}")
+        if 'audio_path' in locals():
+            os.unlink(audio_path)
 
-            try:
-                res = requests.post("https://api.mistral.ai/v1/chat/completions", headers=headers, json=payload)
-                res.raise_for_status()
-                st.session_state.corrected_transcript = res.json()["choices"][0]["message"]["content"]
-            except Exception as e:
-                st.error(f"❌ Mistral correction failed: {str(e)}. Showing raw transcript.")
-                st.session_state.corrected_transcript = st.session_state.final_transcript
-
-# Display final results after recording stops
-if st.session_state.final_transcript:
-    st.subheader("✅ Final Corrected Transcript")
-    st.text_area("Corrected Transcript", st.session_state.corrected_transcript, height=200)
+# Display results after processing
+if st.session_state.show_results and st.session_state.corrected_transcript:
+    st.subheader("✅ Corrected Transcript")
+    st.text_area("Corrected Transcript", st.session_state.corrected_transcript, height=200, key="corrected_display")
     
     # Calculate and display Jaccard Similarity
-    if st.session_state.corrected_transcript:
-        similarity_score = jaccard_similarity(st.session_state.final_transcript, st.session_state.corrected_transcript)
+    if st.session_state.raw_transcript and st.session_state.corrected_transcript:
+        similarity_score = jaccard_similarity(st.session_state.raw_transcript, st.session_state.corrected_transcript)
         
         # Color-code the similarity score
         if similarity_score >= 0.8:
             color = "green"
             interpretation = "Very High - Mistral correction may not be necessary"
         elif similarity_score >= 0.6:
-            color = "orange"
+            color = "orange" 
             interpretation = "Moderate - Some benefit from Mistral correction"
         else:
             color = "red"
             interpretation = "Low - Mistral correction is beneficial"
         
         st.subheader("📊 Transcript Analysis")
-        col1, col2 = st.columns(2)
+        
+        # Create columns for better layout
+        col1, col2 = st.columns([1, 2])
         
         with col1:
             st.metric(
-                label="Jaccard Similarity Score", 
+                label="Jaccard Similarity", 
                 value=f"{similarity_score:.3f}",
-                help="Measures word overlap between original and corrected transcripts"
+                help="Measures word overlap between original and corrected transcripts (0.0 = no overlap, 1.0 = identical)"
             )
         
         with col2:
-            st.markdown(f"**Interpretation:** :{color}[{interpretation}]")
+            if similarity_score >= 0.8:
+                st.success(f"**{interpretation}**")
+            elif similarity_score >= 0.6:
+                st.warning(f"**{interpretation}**")
+            else:
+                st.error(f"**{interpretation}**")
         
         # Additional statistics
         with st.expander("📈 Detailed Analysis"):
-            original_words = len(st.session_state.final_transcript.split())
+            original_words = len(st.session_state.raw_transcript.split())
             corrected_words = len(st.session_state.corrected_transcript.split())
             
             col1, col2, col3 = st.columns(3)
@@ -172,6 +161,23 @@ if st.session_state.final_transcript:
             with col3:
                 word_change = corrected_words - original_words
                 st.metric("Word Count Change", word_change, delta=word_change)
+            
+            # Show word overlap details
+            st.subheader("Word Analysis")
+            raw_words = set(st.session_state.raw_transcript.lower().split())
+            corrected_words_set = set(st.session_state.corrected_transcript.lower().split())
+            
+            intersection = raw_words.intersection(corrected_words_set)
+            only_in_raw = raw_words - corrected_words_set
+            only_in_corrected = corrected_words_set - raw_words
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Common Words", len(intersection))
+            with col2:
+                st.metric("Only in Original", len(only_in_raw))
+            with col3:
+                st.metric("Only in Corrected", len(only_in_corrected))
 
     # Generate PDF with both versions
     if st.button("📄 Generate PDF Report"):
@@ -194,7 +200,7 @@ if st.session_state.final_transcript:
         pdf.set_font("Arial", 'B', 12)
         pdf.cell(0, 10, "Original Transcript:", ln=True)
         pdf.set_font("Arial", size=10)
-        for line in st.session_state.final_transcript.split("\n"):
+        for line in st.session_state.raw_transcript.split("\n"):
             if line.strip():
                 try:
                     pdf.multi_cell(0, 8, line.encode('latin-1', 'replace').decode('latin-1'))
@@ -223,3 +229,11 @@ if st.session_state.final_transcript:
             file_name="transcript_report.pdf",
             mime="application/pdf"
         )
+
+# Show current state for debugging
+if st.checkbox("Show Debug Info"):
+    st.write("**Session State:**")
+    st.write(f"Raw transcript length: {len(st.session_state.raw_transcript)}")
+    st.write(f"Corrected transcript length: {len(st.session_state.corrected_transcript)}")
+    st.write(f"Show results: {st.session_state.show_results}")
+    st.write(f"Audio data available: {audio is not None}")
