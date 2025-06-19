@@ -63,11 +63,24 @@ if audio:
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
+    
+    # Handle text encoding and line breaks properly
     for line in corrected.split("\n"):
-        pdf.multi_cell(0, 10, line)
+        if line.strip():  # Only add non-empty lines
+            # Encode text to handle special characters
+            try:
+                pdf.multi_cell(0, 10, line.encode('latin-1', 'replace').decode('latin-1'))
+            except:
+                # Fallback for problematic characters
+                pdf.multi_cell(0, 10, line.encode('ascii', 'ignore').decode('ascii'))
 
-    with open("transcript.pdf", "wb") as f:
-        pdf.output(f)
-
-    with open("transcript.pdf", "rb") as f:
-        st.download_button("📄 Download Transcript as PDF", f, file_name="transcript.pdf")
+    # Save PDF to bytes
+    pdf_output = pdf.output(dest='S').encode('latin-1')
+    
+    # Provide download button
+    st.download_button(
+        label="📄 Download Transcript as PDF",
+        data=pdf_output,
+        file_name="transcript.pdf",
+        mime="application/pdf"
+    )
