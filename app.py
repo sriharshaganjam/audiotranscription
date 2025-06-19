@@ -7,34 +7,34 @@ import requests
 import os
 from dotenv import load_dotenv
 
-# Load API key
+# Load Mistral API Key
 load_dotenv()
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 
-# Whisper model
+# Load Whisper model
 model = WhisperModel("tiny", compute_type="int8")
 
 st.set_page_config(page_title="Live Audio Transcriber", layout="centered")
 st.title("🎤 Live Audio Transcriber with Mistral Correction")
 
-# Start/Stop Recorder
+# Recorder UI
 audio = mic_recorder(start_prompt="🔴 Transcribe", stop_prompt="⏹ Stop", key="recorder")
 
-# If audio recorded
 if audio:
     st.info("⏳ Transcribing...")
 
+    # Save audio temporarily
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmpfile:
         tmpfile.write(audio["bytes"])
         audio_path = tmpfile.name
 
-    # Whisper Transcription
+    # Transcribe using Whisper
     segments, _ = model.transcribe(audio_path)
     full_text = " ".join([s.text for s in segments])
     st.subheader("📝 Raw Transcription")
     st.text_area("Transcript", full_text, height=200)
 
-    # Mistral Correction
+    # Correct using Mistral
     headers = {
         "Authorization": f"Bearer {MISTRAL_API_KEY}",
         "Content-Type": "application/json"
@@ -49,9 +49,9 @@ if audio:
     }
 
     try:
-        r = requests.post("https://api.mistral.ai/v1/chat/completions", headers=headers, json=payload)
-        r.raise_for_status()
-        corrected = r.json()["choices"][0]["message"]["content"]
+        res = requests.post("https://api.mistral.ai/v1/chat/completions", headers=headers, json=payload)
+        res.raise_for_status()
+        corrected = res.json()["choices"][0]["message"]["content"]
     except Exception as e:
         st.error("❌ Mistral correction failed. Showing raw transcript.")
         corrected = full_text
@@ -59,7 +59,7 @@ if audio:
     st.subheader("✅ Final Corrected Transcript")
     st.text_area("Corrected Transcript", corrected, height=200)
 
-    # PDF Download
+    # Generate PDF
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
