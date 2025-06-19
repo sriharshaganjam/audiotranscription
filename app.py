@@ -41,24 +41,27 @@ class AudioProcessor:
 processor = AudioProcessor()
 
 # Start mic capture
-webrtc_streamer(
+webrtc_ctx = webrtc_streamer(
     key="audio",
     mode=WebRtcMode.SENDONLY,
     in_audio=True,
     audio_receiver_size=4096,
-    audio_processor_factory=lambda: processor,
+    audio_processor_factory=AudioProcessor,
 )
 
 # Transcribe button
 if st.button("🎬 Transcribe"):
     st.info("⏳ Transcribing...")
 
-    # Save raw audio
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
-        audio_path = f.name
-        f.write(b"".join(processor.frames))
+    if webrtc_ctx.audio_receiver:
+        audio_frames = webrtc_ctx.audio_receiver.get_frames(timeout=1.0)
+        audio_data = b"".join([f.to_ndarray().flatten().astype(np.int16).tobytes() for f in audio_frames])
 
-    segments, _ = model.transcribe(audio_path)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
+            audio_path = f.name
+            f.write(audio_data)
+
+        segments, _ = model.transcribe(audio_path)
     full_text = " ".join([seg.text for seg in segments])
     st.session_state.transcript = full_text
     st.text_area("📝 Transcription", full_text, height=200)
