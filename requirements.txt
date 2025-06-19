@@ -1,7 +1,8 @@
 streamlit
 streamlit-webrtc
-openai-whisper
+faster-whisper
 fpdf
 requests
 python-dotenv
 av
+ctranslate2
