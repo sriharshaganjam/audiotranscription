@@ -1,5 +1,5 @@
 import streamlit as st
-from streamlit_webrtc import webrtc_streamer, WebRtcMode, ClientSettings
+from streamlit_webrtc import webrtc_streamer, WebRtcMode
 import av
 import tempfile
 from fpdf import FPDF
@@ -9,16 +9,17 @@ from dotenv import load_dotenv
 import numpy as np
 from faster_whisper import WhisperModel
 
+# Load API Key
 load_dotenv()
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 
 st.set_page_config(page_title="Live Transcriber", layout="wide")
-st.title("🎤 Live Audio Transcriber with Mistral Correction")
+st.title("🎙️ Live Audio Transcriber with Mistral Correction")
 
-# Load model (tiny for fast use)
+# Load Whisper Model
 model = WhisperModel("tiny", compute_type="int8")
 
-# Streamlit session state
+# Initialize state
 if "transcript" not in st.session_state:
     st.session_state.transcript = ""
 if "corrected" not in st.session_state:
@@ -39,34 +40,30 @@ class AudioProcessor:
 
 processor = AudioProcessor()
 
-# WebRTC mic input
+# Start mic capture
 webrtc_streamer(
     key="audio",
     mode=WebRtcMode.SENDONLY,
     in_audio=True,
-    client_settings=ClientSettings(
-        media_stream_constraints={"video": False, "audio": True},
-        rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
-    ),
     audio_receiver_size=4096,
     audio_processor_factory=lambda: processor,
 )
 
-if st.button("Transcribe"):
-    st.info("🧠 Transcribing...")
+# Transcribe button
+if st.button("🎬 Transcribe"):
+    st.info("⏳ Transcribing...")
 
-    # Save audio to temporary file
+    # Save raw audio
     with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
         audio_path = f.name
         f.write(b"".join(processor.frames))
 
-    segments, info = model.transcribe(audio_path)
-    text = " ".join([segment.text for segment in segments])
-    st.session_state.transcript = text
-    st.text_area("Raw Transcript", text, height=200)
+    segments, _ = model.transcribe(audio_path)
+    full_text = " ".join([seg.text for seg in segments])
+    st.session_state.transcript = full_text
+    st.text_area("📝 Transcription", full_text, height=200)
 
-    # Call Mistral API for correction
-    st.info("✨ Sending to Mistral for correction...")
+    # Send to Mistral
     headers = {
         "Authorization": f"Bearer {MISTRAL_API_KEY}",
         "Content-Type": "application/json"
@@ -74,34 +71,34 @@ if st.button("Transcribe"):
     data = {
         "model": "mistral-tiny",
         "messages": [
-            {"role": "system", "content": "You are a helpful assistant that fixes grammar and transcription errors."},
-            {"role": "user", "content": st.session_state.transcript}
+            {"role": "system", "content": "Correct grammar and transcription errors."},
+            {"role": "user", "content": full_text}
         ],
         "temperature": 0.3
     }
 
     try:
-        r = requests.post("https://api.mistral.ai/v1/chat/completions", json=data, headers=headers)
-        r.raise_for_status()
-        corrected = r.json()["choices"][0]["message"]["content"]
+        response = requests.post("https://api.mistral.ai/v1/chat/completions", headers=headers, json=data)
+        response.raise_for_status()
+        corrected = response.json()["choices"][0]["message"]["content"]
         st.session_state.corrected = corrected
-        st.text_area("✅ Corrected Transcript", corrected, height=200)
         st.session_state.show_pdf = True
+        st.text_area("✅ Corrected Transcript", corrected, height=200)
     except Exception as e:
-        st.error("⚠️ Mistral correction failed.")
-        st.session_state.corrected = st.session_state.transcript
+        st.error("❌ Mistral correction failed, using raw transcription.")
+        st.session_state.corrected = full_text
         st.session_state.show_pdf = True
 
-# Generate and download PDF
+# PDF download
 if st.session_state.show_pdf:
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
-    for line in st.session_state.corrected.split('\n'):
+    for line in st.session_state.corrected.split("\n"):
         pdf.multi_cell(0, 10, line)
 
-    pdf_path = "transcript.pdf"
-    pdf.output(pdf_path)
+    with open("transcript.pdf", "wb") as f:
+        pdf.output(f)
 
-    with open(pdf_path, "rb") as f:
-        st.download_button("📄 Download Transcript as PDF", f, file_name="transcript.pdf")
+    with open("transcript.pdf", "rb") as f:
+        st.download_button("📥 Download Transcript as PDF", f, file_name="transcript.pdf")
